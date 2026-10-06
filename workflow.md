@@ -1,5 +1,5 @@
-# Step 1: Fetch Commit & PR Data [AI]
-Using the gh cli, fetch all commits & PR's for today authored or changed by the user. 
+# Step 1: Fetch Commit & PR Data [Script]
+Use the fetch-github script in ./scripts (just execute it, no args needed, already authenticated) to scrape both PR's and Commits. Dont run anything except the compiled binary for this
 
 # Step 2: Fetch Google Calendar data [AI]
 Skip this step for now.
