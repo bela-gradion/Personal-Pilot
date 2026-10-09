@@ -4,3 +4,7 @@ bin/
 
 .env
 .DS_STORE
+
+# Compiled script binaries
+scripts/fetch-github
+scripts/log-tokens
