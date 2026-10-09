@@ -3,3 +3,5 @@ date,timestamp,session_id,input_tokens,output_tokens,cache_tokens,total_tokens,w
 2026-10-06,2026-10-06T15:15:00.000000+07:00,8add68b5-78c7-427e-817f-1804bdd385ea,51711,1706,20330,73747,1.0,personal-pilot daily run - no google calendar support yet - github script executed
 2026-10-06,2026-10-06T16:42:53.869653+07:00,5bff46a3-04c8-44f0-9f81-6d085c87b3c4,219819,8696,357265,585780,1.0,personal-pilot daily run - with required format for gradion mcp- no google calendar support yet - github script executed - local dry run
 2026-10-06,2026-10-06T17:13:20.430151+07:00,10110d26-b180-4065-b1b6-de15da7d887d,28981,1564,48263,78808,1.0,personal-pilot daily run - updated workflow - added script for grabbing token usage
+2026-10-09,2026-10-09T10:35:41.607723+07:00,3abb19ec-6e9e-4084-8fee-527c1e0a01f7,66987,400,0,67387,1.0,personal-pilot daily run
+2026-10-09,2026-10-09T10:46:28.203489+07:00,649facad-05bb-469c-9bcf-53105ac0c2a4,67388,9720,136598,213706,1.0,personal-pilot daily run - added ability to actually push to gw workspace api
