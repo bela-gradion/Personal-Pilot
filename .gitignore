@@ -7,4 +7,5 @@ bin/
 
 # Compiled script binaries
 scripts/fetch-github
+scripts/fetch-calendar
 scripts/log-tokens
