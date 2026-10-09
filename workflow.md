@@ -8,15 +8,26 @@ Execute the compiled binary `./scripts/fetch-github` in the repository root:
 - The binary searches both authored PRs and PRs reviewed/involved by the authenticated user as well as commits, and outputs structured compact JSON to stdout.
 - **Latency & Timeout**: The binary queries multiple GitHub API endpoints over the network and typically takes 10–15 seconds. Commands or agent runners should configure at least a 20s execution wait threshold to avoid premature background detachment.
 
-# Step 2: Fetch Google Calendar Data [AI]
-Skip this step for now.
+# Step 2: Fetch Google Calendar Data [Script]
+Execute the compiled binary `./scripts/fetch-calendar` in the repository root:
+```bash
+./scripts/fetch-calendar
+```
+- The binary expects the `ICAL_FEED_URL` to be set in the env, only try providing one with `-source "$ICAL_FEED_URL"` when nessecary.
+- The binary reads the iCal feed (a `.ics` URL or local file path) and outputs structured compact JSON to stdout.
+- Optionally specify a date with `./scripts/fetch-calendar -source "$ICAL_FEED_URL" -date YYYY-MM-DD` (defaults to today's date) to support backfilling missed days.
+- Do not run `go run` or recompile unless explicitly asked.
+- Output fields per event: `title`, `start` (HH:MM local time), `end` (HH:MM local time), `attendees` (optional).
+- If no events exist for the target date, `events` will be an empty array — still pass the output to Step 3.
 
 # Step 3: Synthesize Timeblocks & Push to Gradion Timesheet [AI]
-Synthesize the scraped GitHub activities from Step 1 into distinct chronological timeblocks for the day.
+Synthesize the scraped GitHub activities from Step 1 and the calendar events from Step 2 into distinct chronological timeblocks for the day.
 
 ### Timeblock Grouping Guidelines:
-- Estimate start and end times based on commit/PR timestamps.
+- **Anchor to calendar events first**: if Step 2 returned events, use their `start`/`end` times as the timeblock boundaries. Map commits and PRs from Step 1 that fall within each calendar block into that block's description.
+- If no calendar events were returned, estimate start and end times based on commit/PR timestamps.
 - Group related work into realistic blocks (e.g., 1.5h to 3.0h intervals).
+- Always prioritise calendar events over GitHub PRs or something similar.
 - Output the structured JSON back to the user with the following fields:
   - `date`: Exact date (`YYYY-MM-DD`)
   - `time_window`: Formatted interval (e.g., `09:30 - 12:00`)
@@ -72,4 +83,4 @@ Execute the compiled token tracking binary `./scripts/log-tokens`:
 - **Descriptive Notes**: Always provide meaningful context via the `-notes` flag (e.g., `-notes "personal-pilot run for 2026-10-06 - pushed to timesheet"`).
 - The binary deterministically parses the session transcript (`transcript.jsonl`), extracts `input_tokens`, `output_tokens`, and `cache_read_tokens`, and appends the record to `data/token_usage.csv`.
 - Do not run ad-hoc scripts or manual transcript queries.
-
+- Also make sure to show the user the used tokens in all categories in the chat afterwards
