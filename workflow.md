@@ -1,7 +1,11 @@
 # Step 1: Fetch Commit & PR Data [Script]
-Execute the compiled binary `./scripts/fetch-github` in the repository root.
+Execute the compiled binary `./scripts/fetch-github` in the repository root:
+```bash
+./scripts/fetch-github
+```
+- Optionally specify a date with `./scripts/fetch-github -date YYYY-MM-DD` (defaults to today's date) to support backfilling missed days.
 - Do not run `go run` or recompile unless explicitly asked.
-- The binary scrapes all Pull Requests and Commits updated today for the authenticated user and prints them to stdout.
+- The binary searches both authored PRs and PRs reviewed/involved by the authenticated user as well as commits, and outputs structured compact JSON to stdout.
 
 # Step 2: Fetch Google Calendar Data [AI]
 Skip this step for now.
