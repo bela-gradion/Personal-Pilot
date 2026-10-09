@@ -6,6 +6,7 @@ Execute the compiled binary `./scripts/fetch-github` in the repository root:
 - Optionally specify a date with `./scripts/fetch-github -date YYYY-MM-DD` (defaults to today's date) to support backfilling missed days.
 - Do not run `go run` or recompile unless explicitly asked.
 - The binary searches both authored PRs and PRs reviewed/involved by the authenticated user as well as commits, and outputs structured compact JSON to stdout.
+- **Latency & Timeout**: The binary queries multiple GitHub API endpoints over the network and typically takes 10–15 seconds. Commands or agent runners should configure at least a 20s execution wait threshold to avoid premature background detachment.
 
 # Step 2: Fetch Google Calendar Data [AI]
 Skip this step for now.
@@ -49,7 +50,7 @@ When preparing or executing calls to Gradion Workspace:
   }
   ```
 - **Execution & Safety Modes**:
-  - **Dry-run (Default)**: Unless the user explicitly orders an immediate push in their prompt, treat all runs as dry-runs. Present the structured timeblocks and exact payload arguments to the user first before dispatching any `POST` request.
+  - **Dry-run (Default)**: Unless the user explicitly orders an immediate push in their prompt, treat all runs as dry-runs. Present the structured timeblocks and exact payload arguments to the user first before dispatching any `POST` request. In dry-run mode, wait for user confirmation before pushing and before executing Step 4, so token logging accurately captures the full session without premature duplicates.
   - **Live Push**: When confirmed or explicitly ordered to push to timesheet, dispatch the `POST` request via `curl`:
     ```bash
     TOKEN=$(security find-generic-password -s GRADION_API_TOKEN -w)
@@ -64,8 +65,11 @@ When preparing or executing calls to Gradion Workspace:
 # Step 4: Track Token Usage [Script]
 Execute the compiled token tracking binary `./scripts/log-tokens`:
 ```bash
-./scripts/log-tokens -session <session-id>
+./scripts/log-tokens -session <session-id> -notes "<contextual description>"
 ```
+- **Execution Timing**: Run Step 4 only when the workflow reaches its terminal state (i.e. immediately after live timesheet entries are pushed, or when the user explicitly concludes a dry-run session without pushing). Running Step 4 mid-workflow records incomplete token metrics and causes duplicate rows in the CSV.
 - If `<session-id>` is omitted, the binary automatically inspects the latest session in `~/.gemini/antigravity-cli/brain/`.
+- **Descriptive Notes**: Always provide meaningful context via the `-notes` flag (e.g., `-notes "personal-pilot run for 2026-10-06 - pushed to timesheet"`).
 - The binary deterministically parses the session transcript (`transcript.jsonl`), extracts `input_tokens`, `output_tokens`, and `cache_read_tokens`, and appends the record to `data/token_usage.csv`.
 - Do not run ad-hoc scripts or manual transcript queries.
+
