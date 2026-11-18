@@ -1,0 +1,16 @@
+{
+  "accounts": ["work-login", "personal-login"],
+  "repos": {
+    "my-org/main-project": { "project": "Main Project", "priority": "high" },
+    "my-user/side-project": { "project": "Side Project", "maxBlocks": 1 },
+    "my-user/private-thing": { "exclude": true }
+  },
+  "defaults": {
+    "classification": "<timesheet classification code>",
+    "task": "#SE",
+    "billable": false,
+    "dayStart": "09:00",
+    "dayEnd": "18:00",
+    "lunch": "12:00-13:00"
+  }
+}
