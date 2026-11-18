@@ -24,7 +24,12 @@ go -C ~/projects/personal-pilot run ./scripts/cmd/pilot github [-date YYYY-MM-DD
 - Known gap: commits on a non-default branch without a PR are not found. Ask the user if the day looks thin.
 
 ### Step 2: Agenda [AI]
-Get the day's agenda (meetings, events) from the **Scylla MCP**.
+Get the day's agenda (meetings, events) from the **Scylla MCP** (`get_my_agenda` with `date`).
+- The result is too large to return (an HTML widget), so it is saved to a file. Do not probe the file; read only the events in one call:
+  ```bash
+  jq -r '.[1].text | fromjson | .events[] | [.start, .end, .title] | @tsv' <saved file>
+  ```
+- Times are UTC. Convert them to local time (the user is on +07:00).
 - If the Scylla MCP is not connected, say so, and continue with GitHub data only unless the user pastes the agenda.
 
 ### Step 3: Propose timeblocks [AI]
@@ -47,7 +52,7 @@ Only after the user confirms.
      https://workspace.gradion.com/api/me/apps/timesheet/tools/list_my_entries/call
    ```
    If entries overlap the proposed blocks, stop and ask the user (skip, or edit via `edit_time`).
-2. Push each block:
+2. Push all blocks in one shell call (one `curl` per block):
    ```bash
    curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"arguments":{"date":"YYYY-MM-DD","startTime":"HH:MM","endTime":"HH:MM","classification":"<defaults.classification>","task":"<defaults.task>","billable":<defaults.billable>,"description":"<Description>"}}' \
