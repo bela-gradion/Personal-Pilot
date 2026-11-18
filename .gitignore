@@ -5,8 +5,5 @@ bin/
 .env
 .DS_STORE
 
-# Compiled script binaries
-scripts/fetch-github
-scripts/fetch-calendar
-scripts/log-tokens
+# Compiled binary, if built locally (the skill uses go run)
 scripts/pilot
