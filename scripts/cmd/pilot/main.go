@@ -47,7 +47,7 @@ func main() {
 
 	case "log-tokens":
 		fs := flag.NewFlagSet("log-tokens", flag.ExitOnError)
-		sessionID := fs.String("session", "", "Session ID")
+		sessionID := fs.String("session", os.Getenv("CLAUDE_CODE_SESSION_ID"), "Session ID (defaults to the current Claude Code session, else the latest transcript)")
 		notes := fs.String("notes", "personal-pilot daily run", "Notes description")
 		outputCSV := fs.String("output", filepath.Join(repoRoot(), "data", "token_usage.csv"), "Output CSV path")
 		_ = fs.Parse(os.Args[2:])

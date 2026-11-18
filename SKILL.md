@@ -60,4 +60,4 @@ Only after a live push, or when the user ends the run without pushing, and only 
 ```bash
 go -C ~/projects/personal-pilot run ./scripts/cmd/pilot log-tokens -notes "<descriptive notes>"
 ```
-It always writes to `data/token_usage.csv` in the repo, whatever the working directory.
+It always writes to `data/token_usage.csv` in the repo, whatever the working directory. It logs the current Claude Code session (`$CLAUDE_CODE_SESSION_ID`), so other sessions running at the same time are not counted; pass `-session <id>` to log a different one.
