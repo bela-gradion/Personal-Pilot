@@ -49,14 +49,15 @@ func main() {
 		fs := flag.NewFlagSet("log-tokens", flag.ExitOnError)
 		sessionID := fs.String("session", "", "Session ID")
 		notes := fs.String("notes", "personal-pilot daily run", "Notes description")
-		outputCSV := fs.String("output", "data/token_usage.csv", "Output CSV path")
+		outputCSV := fs.String("output", filepath.Join(repoRoot(), "data", "token_usage.csv"), "Output CSV path")
 		_ = fs.Parse(os.Args[2:])
 
-		res, err := tokens.LogTokens("", *sessionID, *notes, *outputCSV)
+		res, err := tokens.LogTokens(*sessionID, *notes, *outputCSV)
 		if err != nil {
 			log.Fatalf("Log tokens failed: %v", err)
 		}
-		fmt.Printf("Logged token usage for session %s (Total: %d tokens)\n", res.SessionID, res.Total)
+		fmt.Printf("Logged %s session %s: input %d, output %d, cache %d, total %d tokens\n",
+			res.Source, res.SessionID, res.Input, res.Output, res.Cache, res.Total)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown subcommand %q\n\n", os.Args[1])
@@ -71,5 +72,5 @@ func printUsage() {
 	fmt.Println("  github      Fetch the active gh account's PRs and commits for one day.")
 	fmt.Println("              Covers only the logged-in account: run it once per gh CLI account")
 	fmt.Println("              (gh auth switch --user <login>) and combine the outputs.")
-	fmt.Println("  log-tokens  Track session token usage into CSV")
+	fmt.Println("  log-tokens  Track session token usage into data/token_usage.csv")
 }
