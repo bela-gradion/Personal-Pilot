@@ -7,3 +7,6 @@ bin/
 
 # Compiled binary, if built locally (the skill uses go run)
 scripts/pilot
+
+# Personal repo rules and accounts (see projects.example.json)
+projects.json
