@@ -21,7 +21,11 @@ go -C ~/projects/personal-pilot run ./scripts/cmd/pilot github [-date YYYY-MM-DD
 ```
 - Output per account: `pull_requests` (status `merged`/`opened`/`reviewed`/`updated`, timestamp = the user's own activity that day), `commits` (local timestamps, includes the user's commits on PR branches), each tagged with `project`. Excluded repos are already filtered out.
 - `errors` lists lookups that failed; the rest of the data is still valid. Mention any errors in the proposal.
-- Known gap: commits on a non-default branch without a PR are not found. Ask the user if the day looks thin.
+- Known gap: commits on a non-default branch without a PR are not found. Cover it in the same call by listing the user's local commits across `~/projects`, which also finds work that was never pushed (commits that are also in the GitHub output count once):
+  ```bash
+  for d in ~/projects/*/; do git -C "$d" log --all --since="YYYY-MM-DD 00:00" --until="YYYY-MM-DD 23:59" --author="$(git config user.name)" --format="$(basename "$d") %ad %h %s" --date=format:%H:%M 2>/dev/null; done
+  ```
+  Ask the user if the day still looks thin.
 
 ### Step 2: Agenda [AI]
 Get the day's agenda (meetings, events) from the **Scylla MCP** (`get_my_agenda` with `date`).
