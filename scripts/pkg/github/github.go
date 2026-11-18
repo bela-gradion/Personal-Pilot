@@ -1,10 +1,16 @@
+// Package github collects the active gh CLI account's PRs and commits for one local day.
+//
+// Fetch only sees the account gh is logged in as ("@me"). Run it once per gh
+// CLI account (gh auth switch --user <login>) and combine the outputs.
 package github
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -18,13 +24,11 @@ type ghPR struct {
 	State     string    `json:"state"`
 	URL       string    `json:"url"`
 	CreatedAt time.Time `json:"createdAt"`
-	ClosedAt  time.Time `json:"closedAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 	Author    struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	Repository struct {
-		Name          string `json:"name"`
 		NameWithOwner string `json:"nameWithOwner"`
 	} `json:"repository"`
 }
@@ -35,319 +39,293 @@ type ghCommit struct {
 	Commit struct {
 		Message string `json:"message"`
 		Author  struct {
-			Date string `json:"date"`
+			Date time.Time `json:"date"`
 		} `json:"author"`
 	} `json:"commit"`
 	Repository struct {
 		FullName string `json:"fullName"`
-		Name     string `json:"name"`
 	} `json:"repository"`
+}
+
+type login struct {
+	Login string `json:"login"`
+}
+
+type pullDetail struct {
+	MergedAt *time.Time `json:"merged_at"`
+	MergedBy *login     `json:"merged_by"`
+}
+
+type review struct {
+	User        *login    `json:"user"`
+	SubmittedAt time.Time `json:"submitted_at"`
+}
+
+type prCommit struct {
+	SHA     string `json:"sha"`
+	HTMLURL string `json:"html_url"`
+	Author  *login `json:"author"`
+	Commit  struct {
+		Message string `json:"message"`
+		Author  struct {
+			Date time.Time `json:"date"`
+		} `json:"author"`
+	} `json:"commit"`
 }
 
 type PullRequest struct {
 	Number    string `json:"number"`
 	Title     string `json:"title"`
 	Repo      string `json:"repo"`
-	Status    string `json:"status"`
+	Project   string `json:"project"`
+	Status    string `json:"status"` // merged | opened | reviewed | updated | unknown
 	URL       string `json:"url"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Timestamp string `json:"timestamp"` // local time of the user's own activity that day
 }
 
 type Commit struct {
 	Repo      string `json:"repo"`
+	Project   string `json:"project"`
 	Message   string `json:"message"`
 	Timestamp string `json:"timestamp"`
-	URL       string `json:"url,omitempty"`
+	URL       string `json:"url"`
 }
 
 type Output struct {
 	Date         string        `json:"date"`
+	Account      string        `json:"account"`
 	PullRequests []PullRequest `json:"pull_requests"`
 	Commits      []Commit      `json:"commits"`
+	Errors       []string      `json:"errors,omitempty"`
 }
 
-func runGH(ctx context.Context, args ...string) ([]byte, error) {
+// RepoRule is one repo's entry in projects.json. Other fields there are for the skill.
+type RepoRule struct {
+	Project string `json:"project"`
+	Exclude bool   `json:"exclude"`
+}
+
+type Config struct {
+	Repos map[string]RepoRule `json:"repos"`
+}
+
+// LoadConfig reads projects.json; a missing file means no rules.
+func LoadConfig(path string) (Config, error) {
+	var c Config
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return c, nil
+	}
+	if err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		return c, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return c, nil
+}
+
+// project returns the project name for repo and whether it should be reported.
+func (c Config) project(repo string) (string, bool) {
+	for name, r := range c.Repos {
+		if strings.EqualFold(name, repo) {
+			if r.Project == "" {
+				r.Project = repo[strings.LastIndex(repo, "/")+1:]
+			}
+			return r.Project, !r.Exclude
+		}
+	}
+	return repo[strings.LastIndex(repo, "/")+1:], true
+}
+
+func runGH(ctx context.Context, out any, args ...string) error {
 	var stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "gh", args...)
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	b, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("gh %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		return fmt.Errorf("gh %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return out, nil
+	if err := json.Unmarshal(b, out); err != nil {
+		return fmt.Errorf("gh %s: parse output: %w", strings.Join(args, " "), err)
+	}
+	return nil
 }
 
-func determinePRStatus(pr ghPR, isAuthored bool) string {
-	state := strings.ToLower(pr.State)
-	if state == "merged" {
-		if isAuthored {
-			return "merged"
+func local(t time.Time) string { return t.In(time.Local).Format(time.RFC3339) }
+
+// summarizePR decides what the user did on a PR inside [start, end).
+// It returns false when the user had no own activity on it that day.
+func summarizePR(pr ghPR, d pullDetail, reviews []review, commits []prCommit, me string, start, end time.Time) (PullRequest, []prCommit, bool) {
+	in := func(t time.Time) bool { return !t.Before(start) && t.Before(end) }
+	authored := strings.EqualFold(pr.Author.Login, me)
+
+	var mine []prCommit
+	var lastCommit time.Time
+	for _, c := range commits {
+		if c.Author != nil && strings.EqualFold(c.Author.Login, me) && in(c.Commit.Author.Date) {
+			mine = append(mine, c)
+			if c.Commit.Author.Date.After(lastCommit) {
+				lastCommit = c.Commit.Author.Date
+			}
 		}
-		return "reviewed"
 	}
-	if !isAuthored {
-		return "reviewed"
+	var lastReview time.Time
+	for _, r := range reviews {
+		if r.User != nil && strings.EqualFold(r.User.Login, me) && in(r.SubmittedAt) && r.SubmittedAt.After(lastReview) {
+			lastReview = r.SubmittedAt
+		}
 	}
-	if state == "open" {
-		return "opened"
+
+	var status string
+	var ts time.Time
+	switch {
+	case d.MergedAt != nil && in(*d.MergedAt) && (authored || (d.MergedBy != nil && strings.EqualFold(d.MergedBy.Login, me))):
+		status, ts = "merged", *d.MergedAt
+	case authored && in(pr.CreatedAt):
+		status, ts = "opened", pr.CreatedAt
+	case !lastReview.IsZero():
+		status, ts = "reviewed", lastReview
+	case !lastCommit.IsZero():
+		status, ts = "updated", lastCommit
+	default:
+		return PullRequest{}, nil, false
 	}
-	if state == "closed" {
-		return "closed"
-	}
-	return state
+	return PullRequest{
+		Number:    fmt.Sprintf("#%d", pr.Number),
+		Title:     strings.TrimSpace(pr.Title),
+		Repo:      pr.Repository.NameWithOwner,
+		Status:    status,
+		URL:       pr.URL,
+		Timestamp: local(ts),
+	}, mine, true
 }
 
-func getPRTimestamp(pr ghPR, status string) string {
-	switch status {
-	case "merged":
-		if !pr.ClosedAt.IsZero() {
-			return pr.ClosedAt.Format(time.RFC3339)
-		}
-	case "opened":
-		if !pr.CreatedAt.IsZero() {
-			return pr.CreatedAt.Format(time.RFC3339)
-		}
-	}
-	if !pr.UpdatedAt.IsZero() {
-		return pr.UpdatedAt.Format(time.RFC3339)
-	}
-	if !pr.CreatedAt.IsZero() {
-		return pr.CreatedAt.Format(time.RFC3339)
-	}
-	return ""
-}
-
-// Fetch retrieves GitHub PRs and commits for the given target date.
-func Fetch(ctx context.Context, targetDate string) (*Output, error) {
+// Fetch retrieves the active account's PRs and commits for targetDate (YYYY-MM-DD, local time).
+// Failed lookups are listed in Output.Errors; the rest of the data is still returned.
+func Fetch(ctx context.Context, targetDate string, cfg Config) (*Output, error) {
 	if targetDate == "" {
 		targetDate = time.Now().Format("2006-01-02")
-	} else if _, err := time.Parse("2006-01-02", targetDate); err != nil {
-		return nil, fmt.Errorf("invalid date format %q: expected YYYY-MM-DD", targetDate)
+	}
+	start, err := time.ParseInLocation("2006-01-02", targetDate, time.Local)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date %q: expected YYYY-MM-DD", targetDate)
+	}
+	end := start.AddDate(0, 0, 1)
+	// GitHub search reads plain dates as UTC days; a timestamp range keeps the local day.
+	window := start.Format(time.RFC3339) + ".." + end.Add(-time.Second).Format(time.RFC3339)
+
+	var me login
+	if err := runGH(ctx, &me, "api", "user"); err != nil {
+		return nil, err
 	}
 
+	out := &Output{Date: targetDate, Account: me.Login, PullRequests: []PullRequest{}, Commits: []Commit{}}
 	var (
-		authoredPRs      []ghPR
-		reviewedPRs      []ghPR
-		involvedPRs      []ghPR
-		committerCommits []ghCommit
-		authorCommits    []ghCommit
-		errs             []error
-		mu               sync.Mutex
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		prs     = map[string]ghPR{}
+		commits = map[string]Commit{}
 	)
-
-	var wg sync.WaitGroup
-	wg.Add(5)
-
-	// 1. Authored PRs
-	go func() {
-		defer wg.Done()
-		out, err := runGH(ctx, "search", "prs", "--author", "@me", "--updated", targetDate, "--limit", "100", "--json", "number,title,state,url,repository,createdAt,closedAt,updatedAt,author")
-		if err != nil {
-			mu.Lock()
-			errs = append(errs, err)
-			mu.Unlock()
-			return
-		}
-		var res []ghPR
-		if err := json.Unmarshal(out, &res); err != nil {
-			mu.Lock()
-			errs = append(errs, fmt.Errorf("failed to parse authored PRs: %w", err))
-			mu.Unlock()
+	fail := func(err error) { mu.Lock(); out.Errors = append(out.Errors, err.Error()); mu.Unlock() }
+	addCommit := func(sha, repo, msg, url string, t time.Time) {
+		project, ok := cfg.project(repo)
+		if !ok {
 			return
 		}
 		mu.Lock()
-		authoredPRs = res
+		commits[sha] = Commit{Repo: repo, Project: project, Message: strings.TrimSpace(msg), Timestamp: local(t), URL: url}
 		mu.Unlock()
-	}()
+	}
 
-	// 2. Reviewed PRs
-	go func() {
-		defer wg.Done()
-		out, err := runGH(ctx, "search", "prs", "--reviewed-by", "@me", "--updated", targetDate, "--limit", "100", "--json", "number,title,state,url,repository,createdAt,closedAt,updatedAt,author")
-		if err != nil {
+	for _, role := range []string{"--author", "--reviewed-by", "--involves"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var res []ghPR
+			if err := runGH(ctx, &res, "search", "prs", role, "@me", "--updated", window, "--limit", "100",
+				"--json", "number,title,state,url,repository,createdAt,updatedAt,author"); err != nil {
+				fail(err)
+				return
+			}
 			mu.Lock()
-			errs = append(errs, err)
+			for _, pr := range res {
+				prs[pr.URL] = pr
+			}
 			mu.Unlock()
-			return
-		}
-		var res []ghPR
-		if err := json.Unmarshal(out, &res); err != nil {
-			mu.Lock()
-			errs = append(errs, fmt.Errorf("failed to parse reviewed PRs: %w", err))
-			mu.Unlock()
-			return
-		}
-		mu.Lock()
-		reviewedPRs = res
-		mu.Unlock()
-	}()
-
-	// 3. Involved PRs
-	go func() {
-		defer wg.Done()
-		out, err := runGH(ctx, "search", "prs", "--involves", "@me", "--updated", targetDate, "--limit", "100", "--json", "number,title,state,url,repository,createdAt,closedAt,updatedAt,author")
-		if err != nil {
-			mu.Lock()
-			errs = append(errs, err)
-			mu.Unlock()
-			return
-		}
-		var res []ghPR
-		if err := json.Unmarshal(out, &res); err != nil {
-			mu.Lock()
-			errs = append(errs, fmt.Errorf("failed to parse involved PRs: %w", err))
-			mu.Unlock()
-			return
-		}
-		mu.Lock()
-		involvedPRs = res
-		mu.Unlock()
-	}()
-
-	// 4. Commits (committer-date)
-	go func() {
-		defer wg.Done()
-		out, err := runGH(ctx, "search", "commits", "--author", "@me", "--committer-date", targetDate, "--limit", "100", "--json", "commit,repository,sha,url")
-		if err != nil {
-			mu.Lock()
-			errs = append(errs, err)
-			mu.Unlock()
-			return
-		}
-		var res []ghCommit
-		if err := json.Unmarshal(out, &res); err != nil {
-			mu.Lock()
-			errs = append(errs, fmt.Errorf("failed to parse committer commits: %w", err))
-			mu.Unlock()
-			return
-		}
-		mu.Lock()
-		committerCommits = res
-		mu.Unlock()
-	}()
-
-	// 5. Commits (author-date)
-	go func() {
-		defer wg.Done()
-		out, err := runGH(ctx, "search", "commits", "--author", "@me", "--author-date", targetDate, "--limit", "100", "--json", "commit,repository,sha,url")
-		if err != nil {
-			mu.Lock()
-			errs = append(errs, err)
-			mu.Unlock()
-			return
-		}
-		var res []ghCommit
-		if err := json.Unmarshal(out, &res); err != nil {
-			mu.Lock()
-			errs = append(errs, fmt.Errorf("failed to parse author commits: %w", err))
-			mu.Unlock()
-			return
-		}
-		mu.Lock()
-		authorCommits = res
-		mu.Unlock()
-	}()
-
+		}()
+	}
+	for _, dateFlag := range []string{"--author-date", "--committer-date"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var res []ghCommit
+			if err := runGH(ctx, &res, "search", "commits", "--author", "@me", dateFlag, window, "--limit", "100",
+				"--json", "commit,repository,sha,url"); err != nil {
+				fail(err)
+				return
+			}
+			for _, c := range res {
+				addCommit(c.SHA, c.Repository.FullName, c.Commit.Message, c.URL, c.Commit.Author.Date)
+			}
+		}()
+	}
 	wg.Wait()
 
-	if len(errs) > 0 {
-		var msg []string
-		for _, e := range errs {
-			msg = append(msg, e.Error())
-		}
-		return nil, fmt.Errorf("github fetch encountered errors:\n - %s", strings.Join(msg, "\n - "))
-	}
-
-	// Deduplicate PRs
-	uniquePRs := make(map[string]ghPR)
-	isAuthored := make(map[string]bool)
-
-	for _, pr := range authoredPRs {
-		uniquePRs[pr.URL] = pr
-		isAuthored[pr.URL] = true
-	}
-	for _, pr := range reviewedPRs {
-		if _, exists := uniquePRs[pr.URL]; !exists {
-			uniquePRs[pr.URL] = pr
-		}
-	}
-	for _, pr := range involvedPRs {
-		if _, exists := uniquePRs[pr.URL]; !exists {
-			uniquePRs[pr.URL] = pr
-		}
-	}
-
-	prOutputs := make([]PullRequest, 0, len(uniquePRs))
-	for _, pr := range uniquePRs {
+	for _, pr := range prs {
 		repo := pr.Repository.NameWithOwner
-		if repo == "" {
-			repo = pr.Repository.Name
+		project, ok := cfg.project(repo)
+		if !ok {
+			continue
 		}
-		status := determinePRStatus(pr, isAuthored[pr.URL])
-		prOutputs = append(prOutputs, PullRequest{
-			Number:    fmt.Sprintf("#%d", pr.Number),
-			Title:     strings.TrimSpace(pr.Title),
-			Repo:      repo,
-			Status:    status,
-			URL:       pr.URL,
-			Timestamp: getPRTimestamp(pr, status),
-		})
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			base := fmt.Sprintf("repos/%s/pulls/%d", repo, pr.Number)
+			var (
+				d   pullDetail
+				rs  []review
+				cs  []prCommit
+				err error
+			)
+			// shortcut: first 100 reviews/commits per PR only, page through them if a PR ever exceeds that.
+			if err = runGH(ctx, &d, "api", base); err == nil {
+				if err = runGH(ctx, &rs, "api", base+"/reviews?per_page=100"); err == nil {
+					err = runGH(ctx, &cs, "api", base+"/commits?per_page=100")
+				}
+			}
+			if err != nil {
+				fail(err)
+				mu.Lock()
+				out.PullRequests = append(out.PullRequests, PullRequest{
+					Number: fmt.Sprintf("#%d", pr.Number), Title: strings.TrimSpace(pr.Title), Repo: repo,
+					Project: project, Status: "unknown", URL: pr.URL, Timestamp: local(pr.UpdatedAt),
+				})
+				mu.Unlock()
+				return
+			}
+			p, mine, ok := summarizePR(pr, d, rs, cs, me.Login, start, end)
+			if !ok {
+				return
+			}
+			p.Project = project
+			mu.Lock()
+			out.PullRequests = append(out.PullRequests, p)
+			mu.Unlock()
+			for _, c := range mine {
+				addCommit(c.SHA, repo, c.Commit.Message, c.HTMLURL, c.Commit.Author.Date)
+			}
+		}()
 	}
+	wg.Wait()
 
-	sort.Slice(prOutputs, func(i, j int) bool {
-		if prOutputs[i].Timestamp != prOutputs[j].Timestamp {
-			return prOutputs[i].Timestamp < prOutputs[j].Timestamp
-		}
-		return prOutputs[i].Number < prOutputs[j].Number
-	})
-
-	// Deduplicate Commits
-	uniqueCommits := make(map[string]ghCommit)
-	for _, c := range committerCommits {
-		key := c.SHA
-		if key == "" {
-			key = c.URL
-		}
-		if key != "" {
-			uniqueCommits[key] = c
-		}
+	for _, c := range commits {
+		out.Commits = append(out.Commits, c)
 	}
-	for _, c := range authorCommits {
-		key := c.SHA
-		if key == "" {
-			key = c.URL
-		}
-		if key != "" {
-			uniqueCommits[key] = c
-		}
-	}
-
-	commitOutputs := make([]Commit, 0, len(uniqueCommits))
-	for _, c := range uniqueCommits {
-		repo := c.Repository.FullName
-		if repo == "" {
-			repo = c.Repository.Name
-		}
-		commitOutputs = append(commitOutputs, Commit{
-			Repo:      repo,
-			Message:   strings.TrimSpace(c.Commit.Message),
-			Timestamp: c.Commit.Author.Date,
-			URL:       c.URL,
-		})
-	}
-
-	sort.Slice(commitOutputs, func(i, j int) bool {
-		if commitOutputs[i].Timestamp != commitOutputs[j].Timestamp {
-			return commitOutputs[i].Timestamp < commitOutputs[j].Timestamp
-		}
-		return commitOutputs[i].URL < commitOutputs[j].URL
-	})
-
-	return &Output{
-		Date:         targetDate,
-		PullRequests: prOutputs,
-		Commits:      commitOutputs,
-	}, nil
+	sort.Slice(out.PullRequests, func(i, j int) bool { return out.PullRequests[i].Timestamp < out.PullRequests[j].Timestamp })
+	sort.Slice(out.Commits, func(i, j int) bool { return out.Commits[i].Timestamp < out.Commits[j].Timestamp })
+	sort.Strings(out.Errors)
+	return out, nil
 }
 
 // RenderJSON marshals the Output struct to JSON (pretty or compact).
